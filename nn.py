@@ -81,13 +81,171 @@ class Optimizer_SGD:
 
     # Initialize optimizer - set settings, 
     # learning rate of 1. is default for this optimizer
-    def __init__(self, learning_rate=1): # <<< setting this to 1 causes the accuracy to remain exactly 1/3, but a lower value becomes much more accurate.
+    def __init__(self, learning_rate=1.0, decay=0., momentum=0.): 
         self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.momentum = momentum
+
+    def pre_update_params(self):
+
+        if self.decay:
+            self.current_learning_rate = self.current_learning_rate * (1. / (1. + self.decay * self.iterations)) # <<TODO change this to self.learning rate once the book is fixed
 
     # Update parameters
     def update_params(self, layer):
-        layer.weights += -self.learning_rate * layer.dweights
-        layer.biases += -self.learning_rate * layer.dbiases
+
+        # If a layer does not already store past momentum, create arrays for that purpose
+        if not hasattr(layer, 'weight_momentums'):
+            layer.weight_momentums = np.zeros_like(layer.weights)
+            layer.bias_momentums = np.zeros_like(layer.biases)
+
+        # If we use momentum
+        if self.momentum:
+
+            weight_updates = ((self.momentum * layer.weight_momentums) - (self.current_learning_rate * layer.dweights))
+            layer.weight_momentums = weight_updates
+
+            bias_updates = ((self.momentum * layer.bias_momentums) - (self.current_learning_rate * layer.dbiases))
+            layer.bias_momentums = bias_updates
+        else:
+            weight_updates = -self.current_learning_rate * layer.dweights
+            bias_updates = -self.current_learning_rate * layer.dbiases
+
+        layer.weights += weight_updates
+        layer.biases += bias_updates
+
+    def post_update_params(self):
+        self.iterations += 1
+
+class Optimizer_Adagrad:
+
+    # Initialize optimizer - set settings, 
+    # learning rate of 1. is default for this optimizer
+    def __init__(self, learning_rate=1.0, decay=0., epsilon=1e-7): 
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+
+    def pre_update_params(self):
+
+        if self.decay:
+            self.current_learning_rate = self.current_learning_rate * (1. / (1. + self.decay * self.iterations)) # <<TODO change this to self.learning rate once the book is fixed
+
+    # Update parameters
+    def update_params(self, layer):
+
+        # If layer does not contain cache arrays,
+        # create ones filled with zeros
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_cache = np.zeros_like(layer.biases)
+
+        layer.weight_cache += layer.dweights**2
+        layer.bias_cache += layer.dbiases**2
+
+        weight_updates = -self.current_learning_rate * layer.dweights / (np.sqrt(layer.weight_cache) + self.epsilon)
+        bias_updates = -self.current_learning_rate * layer.dbiases / (np.sqrt(layer.bias_cache) + self.epsilon)
+
+        layer.weights += weight_updates
+        layer.biases += bias_updates
+
+    def post_update_params(self):
+        self.iterations += 1
+
+class Optimizer_RMSprop:
+
+    # Initialize optimizer - set settings, 
+    # learning rate of 0.001 is default for this optimizer
+    def __init__(self, learning_rate=0.001, decay=0., epsilon=1e-7, rho=0.9): 
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+        self.rho = rho
+
+    def pre_update_params(self):
+
+        if self.decay:
+            self.current_learning_rate = self.current_learning_rate * (1. / (1. + self.decay * self.iterations)) # <<TODO change this to self.learning rate once the book is fixed
+
+    # Update parameters
+    def update_params(self, layer):
+
+        # If layer does not contain cache arrays,
+        # create ones filled with zeros
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_cache = np.zeros_like(layer.biases)
+
+        layer.weight_cache = self.rho * layer.weight_cache + (1 - self.rho) * layer.dweights**2
+        layer.bias_cache = self.rho * layer.bias_cache + (1 - self.rho) * layer.dbiases**2
+
+        weight_updates = -self.current_learning_rate * layer.dweights / (np.sqrt(layer.weight_cache) + self.epsilon)
+        bias_updates = -self.current_learning_rate * layer.dbiases / (np.sqrt(layer.bias_cache) + self.epsilon)
+
+        layer.weights += weight_updates
+        layer.biases += bias_updates
+
+    def post_update_params(self):
+        self.iterations += 1
+
+class Optimizer_Adam:
+
+    # Initialize optimizer - set settings, 
+    def __init__(self, learning_rate=0.001, decay=0., epsilon=1e-7, beta_1=0.9, beta_2=0.999): 
+        self.learning_rate = learning_rate
+        self.current_learning_rate = learning_rate
+        self.decay = decay
+        self.iterations = 0
+        self.epsilon = epsilon
+        self.beta_1 = beta_1
+        self.beta_2 = beta_2
+
+    def pre_update_params(self):
+
+        if self.decay:
+            self.current_learning_rate = self.current_learning_rate * (1. / (1. + self.decay * self.iterations)) # <<TODO change this to self.learning rate once the book is fixed
+
+    # Update parameters
+    def update_params(self, layer):
+
+        # If layer does not contain cache/momentum arrays,
+        # create ones filled with zeros
+        if not hasattr(layer, 'weight_cache'):
+            layer.weight_momentums = np.zeros_like(layer.weights)
+            layer.weight_cache = np.zeros_like(layer.weights)
+            layer.bias_momentums = np.zeros_like(layer.biases)
+            layer.bias_cache = np.zeros_like(layer.biases)
+
+        # update momentum
+        layer.weight_momentums = self.beta_1 * layer.weight_momentums + (1 - self.beta_1) * layer.dweights
+        layer.bias_momentums = self.beta_1 * layer.bias_momentums + (1 - self.beta_1) * layer.dbiases
+
+        # Get corrected momentum
+        weight_momentums_corrected = layer.weight_momentums / (1 - self.beta_1 ** (self.iterations + 1))
+        bias_momentums_corrected = layer.bias_momentums / (1 - self.beta_1 ** (self.iterations + 1))
+
+        # Update cache
+        layer.weight_cache = self.beta_2 * layer.weight_cache + (1 - self.beta_2) * layer.dweights**2
+        layer.bias_cache = self.beta_2 * layer.bias_cache + (1 - self.beta_2) * layer.dbiases**2
+
+        # Get corrected cache
+        weight_cache_corrected = layer.weight_cache / (1 - self.beta_2 ** (self.iterations + 1))
+        bias_cache_corrected = layer.bias_cache / (1 - self.beta_2 ** (self.iterations + 1))
+
+        weight_updates = -self.current_learning_rate * weight_momentums_corrected / (np.sqrt(weight_cache_corrected) + self.epsilon)
+        bias_updates = -self.current_learning_rate * bias_momentums_corrected / (np.sqrt(bias_cache_corrected) + self.epsilon)
+
+        layer.weights += weight_updates
+        layer.biases += bias_updates
+
+    def post_update_params(self):
+        self.iterations += 1
 
 # === MISCELLANEOUS ===
 
@@ -128,10 +286,12 @@ class Loss_CategoricalCrossentropy:
         self.dvalues = self.dvalues / samples
 
 X, y = create_data(100, 3)
-#plt.scatter(X[:, 0], X[:, 1], c=y, s=40, cmap='brg')
-#plt.show()
 
+def plot_data(myX, myy):
+    plt.scatter(myX[:, 0], myX[:, 1], c=myy, s=40, cmap='brg')
+    plt.show()
 
+#plot_data(X, y)
 
 dense1 = Layer_Dense(2,64)
 activation1 = Activation_ReLU()
@@ -139,7 +299,7 @@ dense2 = Layer_Dense(64, 3)
 activation2 = Activation_Softmax()
 
 loss_function = Loss_CategoricalCrossentropy()
-optimizer = Optimizer_SGD()
+optimizer = Optimizer_Adam(learning_rate=0.05, decay=1e-8)
 
 for epoch in range(10001):
 
@@ -160,8 +320,8 @@ for epoch in range(10001):
 
     #print('acc:', accuracy)
 
-    if not epoch % 100:
-        print('epoch:', epoch, 'acc:', accuracy, 'loss:', loss)
+    if not epoch % 1000:
+        print('epoch:', epoch, 'acc:', accuracy, 'loss:', loss, 'learning rate:', optimizer.current_learning_rate)
 
     # backward pass!
     loss_function.backward(activation2.output, y)
@@ -170,63 +330,8 @@ for epoch in range(10001):
     activation1.backward(dense2.dvalues)
     dense1.backward(activation1.dvalues)
 
+    optimizer.pre_update_params()
     optimizer.update_params(dense1)
     optimizer.update_params(dense2)
+    optimizer.post_update_params()
 
-
-
-
-
-
-
-
-
-
-
-'''
-# helper variables
-lowest_loss = 99999
-best_dense1_weights = dense1.weights
-best_dense1_biases = dense1.biases
-best_dense2_weights = dense2.weights
-best_dense2_biases = dense2.biases
-
-
-
-# Forward pass
-x = [1.0, -2.0, 3.0]  # input values
-w = [-3.0, -1.0, 2.0]  # weights
-b = 1.0  # bias
-
-# Multiplying inputs by weights
-wx0 = x[0] * w[0]
-wx1 = x[1] * w[1]
-wx2 = x[2] * w[2]
-
-# Adding
-s = wx0 + wx1 + wx2 + b
-
-# ReLU
-y = max(s, 0)  # we already described that with ReLU activation function description
-print(y)
-
-dy = (1 if s > 0 else 0)
-
-dwx0 = 1 * dy 
-dwx1 = 1 * dy
-dwx2 = 1 * dy
-db = 1 * dy
-
-dw0 = (1 if s > 0 else 0) * x[0]
-dw1 = (1 if s > 0 else 0) * x[1]
-dw2 = (1 if s > 0 else 0) * x[2]
-dx0 = (1 if s > 0 else 0) * w[0]
-dx1 = (1 if s > 0 else 0) * w[1]
-dx2 = (1 if s > 0 else 0) * w[2]
-
-dx = [dx0, dx1, dx2]  # gradients on inputs
-dw = [dw0, dw1, dw2]  # gradients on weights
-db  # gradient on bias...just 1 bias here.
-
-print(dx, dw)
-'''
