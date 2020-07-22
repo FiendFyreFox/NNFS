@@ -3,12 +3,14 @@ import math
 import nnfs
 from nnfs.datasets import spiral_data
 import matplotlib.pyplot as plt
+import random
 
 nnfs.init()
 
 np.random.seed(0)
+random.seed(0)
 
-def create_data(n, k): # using this for now to ensure that my results are the same as yours
+def create_data(n, k):
     X = np.zeros((n*k, 2))  # data matrix (each row = single example)
     y = np.zeros(n*k, dtype='uint8')  # class labels
     for j in range(k):
@@ -52,15 +54,29 @@ class Activation_Softmax:
     def backward(self, dvalues):
         self.dvalues = dvalues.copy()
 
+class Activation_Sigmoid:
+
+    def forward(self, inputs):
+        self.input = inputs
+        self.output = 1 / (1 + np.exp(-inputs))
+
+    def backward(self, dvalues):
+        self.dvalues = dvalues * (1 - self.output) * self.output
+
 # === LAYERS ===
 
 class Layer_Dense:
-    def __init__(self, n_inputs, n_neurons):
+    def __init__(self, n_inputs, n_neurons, weight_regularizer_l1=0, weight_regularizer_l2=0, bias_regularizer_l1=0, bias_regularizer_l2=0):
 
         self.weights = 0.01 * np.random.randn(n_inputs, n_neurons)
         self.biases = np.zeros((1, n_neurons))
 
         self.inputs = n_inputs
+
+        self.weight_regularizer_l1 = weight_regularizer_l1
+        self.weight_regularizer_l2 = weight_regularizer_l2
+        self.bias_regularizer_l1 = bias_regularizer_l1
+        self.bias_regularizer_l2 = bias_regularizer_l2
 
     def forward(self, inputs):
 
@@ -72,8 +88,44 @@ class Layer_Dense:
         # Gradients on parameters
         self.dweights = np.dot(self.inputs.T, dvalues)
         self.dbiases = np.sum(dvalues, axis=0, keepdims=True)
+
+        # Gradients on regularization
+        # L1 weights
+        if self.weight_regularizer_l1 > 0:
+            dL1 = self.weights.copy()
+            dL1[dL1 >= 0] = 1
+            dL1[dL1 < 0] = -1
+            self.dweights += self.weight_regularizer_l1 * dL1
+        # L2 weights
+        if self.weight_regularizer_l2 > 0:
+            self.dweights += 2 * self.weight_regularizer_l2 * self.weights
+        # L1 biases
+        if self.bias_regularizer_l1 > 0:
+            dL1 = self.biases.copy()
+            dL1[dL1 >= 0] = 1
+            dL1[dL1 < 0] = -1
+            self.dbiases += self.bias_regularizer_l1 * dL1
+        # L2 biases
+        if self.bias_regularizer_l2 > 0:
+            self.dbiases += 2 * self.bias_regularizer_l2 * self.biases
+
         # gradient on values
         self.dvalues = np.dot(dvalues, self.weights.T)
+
+class Layer_Dropout:
+
+    def __init__(self, rate):
+        self.rate = 1 - rate
+
+    def forward(self, values):
+        self.input = values
+
+        self.binary_mask = np.random.binomial(1, self.rate, size=values.shape) / self.rate
+        # Apply mask to output values
+        self.output = values * self.binary_mask
+
+    def backward(self, dvalues):
+        self.dvalues = dvalues * self.binary_mask
 
 # === OPTIMIZERS ===
 
@@ -247,9 +299,35 @@ class Optimizer_Adam:
     def post_update_params(self):
         self.iterations += 1
 
-# === MISCELLANEOUS ===
+# === LOSS FUNCTIONS ===
 
-class Loss_CategoricalCrossentropy:
+# Common loss class
+class Loss:
+
+    def regularization_loss(self, layer):
+
+        regularization_loss = 0
+
+        # L1 regularization - weights
+        if layer.weight_regularizer_l1 > 0:
+            regularization_loss += layer.weight_regularizer_l1 * np.sum(np.abs(layer.weights))
+
+        #L2 regularization - weights
+        if layer.weight_regularizer_l2 > 0:
+            regularization_loss += layer.weight_regularizer_l2 * np.sum(layer.weights * layer.weights)
+
+         # L1 regularization - biases
+        if layer.bias_regularizer_l1 > 0:
+            regularization_loss += layer.bias_regularizer_l1 * np.sum(np.abs(layer.biases))
+
+        #L2 regularization - biases
+        if layer.bias_regularizer_l2 > 0:
+            regularization_loss += layer.bias_regularizer_l2 * np.sum(layer.biases * layer.biases)
+
+        return regularization_loss
+
+        
+class Loss_CategoricalCrossentropy(Loss):
 
     def forward(self, y_pred, y_true):
 
@@ -285,21 +363,43 @@ class Loss_CategoricalCrossentropy:
         self.dvalues[range(samples), y_true] -= 1
         self.dvalues = self.dvalues / samples
 
-X, y = create_data(100, 3)
+class Loss_BinaryCrossentropy(Loss):
+
+    def forward(self, y_pred, y_true):
+
+        # Clip data to prevent division by 0
+        # Clip both sides to not drag mean towards any value
+        y_pred_clipped = np.clip(y_pred, 1e-7, 1 - 1e-7)
+
+        sample_losses = -(y_true * np.log(y_pred_clipped) + (1 - y_true) * np.log(1 - y_pred_clipped))
+
+        return sample_losses
+
+    def backward(self, dvalues, y_true):
+
+        # clip both sides
+        clipped_dvalues = np.clip(dvalues, 1e-7, 1 - 1e-7)
+
+        self.dvalues = -(y_true / clipped_dvalues - (1 - y_true) / (1 - clipped_dvalues))
+
+# === Miscellaneous ===
+
+X, y = spiral_data(100, 2)
+y = y.reshape(-1, 1)
 
 def plot_data(myX, myy):
     plt.scatter(myX[:, 0], myX[:, 1], c=myy, s=40, cmap='brg')
     plt.show()
 
-#plot_data(X, y)
-
-dense1 = Layer_Dense(2,64)
+plot_data(X, y)
+dense1 = Layer_Dense(2, 64, weight_regularizer_l2=5e-4, bias_regularizer_l2=5e-4)
 activation1 = Activation_ReLU()
-dense2 = Layer_Dense(64, 3)
-activation2 = Activation_Softmax()
+#dropout1 = Layer_Dropout(0.1)
+dense2 = Layer_Dense(64, 1)
+activation2 = Activation_Sigmoid()
 
-loss_function = Loss_CategoricalCrossentropy()
-optimizer = Optimizer_Adam(learning_rate=0.05, decay=1e-8)
+loss_function = Loss_BinaryCrossentropy()
+optimizer = Optimizer_Adam(decay=1e-8) # << TODO find out why my results are always different
 
 for epoch in range(10001):
 
@@ -310,20 +410,25 @@ for epoch in range(10001):
 
     #print(activation2.output[:5])
 
-    loss = loss_function.forward(activation2.output, y)
+    sample_losses = loss_function.forward(activation2.output, y)
+    data_loss = np.mean(sample_losses)
 
-    #rint('loss:', loss)
+    regularization_loss = loss_function.regularization_loss(dense1) + loss_function.regularization_loss(dense2)
+
+    # Overall loss:
+    loss = data_loss + regularization_loss
+
 
     #calculate accuracy:
-    predictions = np.argmax(activation2.output, axis=1)  # calculate values along first axis
+    predictions = (activation2.output > 0.5) * 1  # calculate values along first axis
     accuracy = np.mean(predictions==y)
 
     #print('acc:', accuracy)
 
     if not epoch % 1000:
-        print('epoch:', epoch, 'acc:', accuracy, 'loss:', loss, 'learning rate:', optimizer.current_learning_rate)
+        print('epoch:', epoch, 'acc:', f'{accuracy:.3f}', 'loss:', f'{loss:.3f}', '(data_loss:', f'{data_loss:.3f}', 'reg_loss:', f'{regularization_loss:.3f})', 'lr:', optimizer.current_learning_rate)
 
-    # backward pass!
+    # backward pass
     loss_function.backward(activation2.output, y)
     activation2.backward(loss_function.dvalues)
     dense2.backward(activation2.dvalues)
@@ -335,3 +440,21 @@ for epoch in range(10001):
     optimizer.update_params(dense2)
     optimizer.post_update_params()
 
+X_test, y_test = spiral_data(100, 2)
+y_test = y_test.reshape(-1, 1)
+
+dense1.forward(X_test)
+activation1.forward(dense1.output)
+dense2.forward(activation1.output)
+activation2.forward(dense2.output)
+
+
+sample_losses = loss_function.forward(activation2.output, y_test)
+loss = np.mean(sample_losses)
+
+
+#calculate accuracy:
+predictions = (activation2.output > 0.5) * 1  # calculate values along first axis
+accuracy = np.mean(predictions==y_test)
+
+print(f'validation, acc: {accuracy:.3f}, loss: {loss:.3f}')
